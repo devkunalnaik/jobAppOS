@@ -72,7 +72,7 @@ function mapGoogleJob(job, index, query) {
     title: job.title || query,
     location: job.location || 'Location not listed',
     salary: job.detected_extensions?.salary || '',
-    posted: job.detected_extensions?.posted_at || 'Recently listed',
+    posted: job.detected_extensions?.posted_at || 'Date not listed',
     workType: job.detected_extensions?.schedule_type || 'Full-time',
     companyType: classifyCompany(job.company_name || ''),
     sponsorshipEvidence: sponsorshipEvidence(evidence) ? 'Sponsorship mentioned' : 'Confirm with employer',

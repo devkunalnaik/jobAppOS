@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, ArrowUpRight, Bookmark, BriefcaseBusiness, CalendarDays, Check,
+  ArrowDownAZ, ArrowRight, ArrowUpRight, Bookmark, BriefcaseBusiness, CalendarDays, Check,
   CheckCircle2, ChevronDown, CircleHelp, Clock3, ExternalLink, FileText, Filter,
   Globe2, LayoutDashboard, MapPin, Search, Send, Settings2, Sparkles, Trash2, X,
 } from 'lucide-react'
@@ -13,6 +13,21 @@ const statusOptions = ['Saved', 'Applied', 'Interviewing', 'Offer', 'Rejected']
 const initialQuery = 'Engineer'
 const initialDestination = 'All destinations'
 const todayLabel = new Intl.DateTimeFormat('en', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())
+const sortReferenceTime = Date.now()
+
+function getPostingAge(posted) {
+  const label = String(posted || '').trim()
+  const relativeMatch = label.match(/(\d+)\s+(minute|hour|day|week|month|year)s?\s+ago/i)
+  if (relativeMatch) {
+    const units = { minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 604_800_000, month: 2_592_000_000, year: 31_536_000_000 }
+    return Number(relativeMatch[1]) * units[relativeMatch[2].toLowerCase()]
+  }
+  if (/just now|today/i.test(label)) return 0
+  if (/recently listed|date not listed/i.test(label)) return null
+  if (/yesterday/i.test(label)) return 86_400_000
+  const parsed = Date.parse(label)
+  return Number.isNaN(parsed) ? null : Math.max(0, sortReferenceTime - parsed)
+}
 
 function App() {
   const [jobs, setJobs] = useState([])
@@ -20,6 +35,7 @@ function App() {
   const [query, setQuery] = useState(initialQuery)
   const [destination, setDestination] = useState(initialDestination)
   const [companyType, setCompanyType] = useState('all')
+  const [sortOrder, setSortOrder] = useState('newest')
   const [page, setPage] = useState('discover')
   const [selectedJob, setSelectedJob] = useState(null)
   const [source, setSource] = useState('Sample listings')
@@ -118,6 +134,14 @@ function App() {
   const visibleApplications = useMemo(() => statusFilter === 'All'
     ? applications
     : applications.filter((application) => application.status === statusFilter), [applications, statusFilter])
+  const sortedJobs = useMemo(() => [...jobs].sort((first, second) => {
+    if (sortOrder === 'alphabetical') return first.company.localeCompare(second.company, undefined, { sensitivity: 'base' })
+    const firstAge = getPostingAge(first.posted)
+    const secondAge = getPostingAge(second.posted)
+    if (firstAge === null) return secondAge === null ? 0 : 1
+    if (secondAge === null) return -1
+    return sortOrder === 'oldest' ? secondAge - firstAge : firstAge - secondAge
+  }), [jobs, sortOrder])
   const savedCount = applications.filter((application) => application.status === 'Saved').length
   const appliedCount = applications.filter((application) => application.status !== 'Saved').length
   const interviewCount = applications.filter((application) => application.status === 'Interviewing').length
@@ -173,13 +197,13 @@ function App() {
               <div className="metric"><span className="metric-icon blue"><CalendarDays size={17} /></span><span className="metric-copy"><small>Interviewing</small><strong>{interviewCount.toString().padStart(2, '0')}</strong></span><span className="metric-note">keep the momentum</span></div>
             </section>
 
-            <div className="results-heading"><div><h2>Opportunities for you</h2><p>{loading ? 'Searching across destinations...' : `${jobs.length} roles to explore`} <span className="result-dot">·</span> <span className="source-label"><span className={source === 'Google Jobs' ? 'source-indicator live' : 'source-indicator'} />{source}</span></p></div><button className="filter-button" onClick={() => { setDestination('All destinations'); searchJobs(query, 'All destinations') }}><Filter size={15} /> Reset filters</button></div>
+            <div className="results-heading"><div><h2>Opportunities for you</h2><p>{loading ? 'Searching across destinations...' : `${jobs.length} roles to explore`} <span className="result-dot">·</span> <span className="source-label"><span className={source === 'Google Jobs' ? 'source-indicator live' : 'source-indicator'} />{source}</span></p></div><div className="results-actions"><label className="job-sort-control"><ArrowDownAZ size={15} /><span className="sr-only">Sort jobs</span><select aria-label="Sort jobs" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="alphabetical">Alphabetical (company)</option></select><ChevronDown size={13} /></label><button className="filter-button" onClick={() => { setDestination('All destinations'); searchJobs(query, 'All destinations') }}><Filter size={15} /> Reset filters</button></div></div>
             {source === 'Sample listings' && <div className="demo-notice"><Sparkles size={15} /><span>Showing sample listings. Add <code>SERPAPI_KEY</code> to <code>.env</code> to search live Google Jobs results.</span></div>}
             {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error"><X size={16} /></button></div>}
 
             <section className="job-workspace">
               <div className="job-list" aria-label="Job results">
-                {loading ? <div className="loading-state"><span className="spinner" /> Finding sponsored roles</div> : jobs.length === 0 ? <div className="empty-state"><div className="empty-icon"><Search size={22} /></div><strong>No roles found</strong><p>Try another title or destination.</p></div> : jobs.map((job) => (
+                {loading ? <div className="loading-state"><span className="spinner" /> Finding sponsored roles</div> : sortedJobs.length === 0 ? <div className="empty-state"><div className="empty-icon"><Search size={22} /></div><strong>No roles found</strong><p>Try another title or destination.</p></div> : sortedJobs.map((job) => (
                   <button key={job.id} className={`job-card ${selectedJob?.id === job.id ? 'selected' : ''}`} onClick={() => setSelectedJob(job)}>
                     <span className={`company-mark mark-${job.accent || 'green'}`}>{job.company.slice(0, 1).toUpperCase()}</span>
                     <span className="job-card-body"><span className="job-company-line"><span className="job-company-name"><strong>{job.company}</strong>{job.companyType !== 'other' && <span className={`company-type-pill type-${job.companyType}`}>{job.companyType === 'top-mnc' ? 'MNC' : 'Startup'}</span>}</span><span className="job-posted"><Clock3 size={12} />{job.posted}</span></span><span className="job-title-line">{job.title}</span><span className="job-card-meta"><span><MapPin size={13} />{job.location}</span><span className="meta-dot">·</span><span>{job.workType || 'Full-time'}</span></span><span className="job-card-bottom"><span className="sponsor-tag"><Check size={12} /> {job.sponsorshipEvidence || 'Sponsorship noted'}</span><span className="salary-label">{job.salary || 'Salary not listed'}</span></span></span><ArrowUpRight className="card-arrow" size={16} />
