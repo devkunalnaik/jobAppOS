@@ -22,5 +22,7 @@ services:
         sync: false
       - key: SERPAPI_KEY
         sync: false
+      - key: JSEARCH_KEY
+        sync: false
       - key: ALLOW_LOCAL_MIGRATION
         value: 'false'
