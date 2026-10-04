@@ -99,7 +99,7 @@ function App() {
       setSource(result.source)
       setSelectedJob((current) => result.jobs.find((job) => job.id === current?.id) ?? result.jobs[0] ?? null)
     } catch {
-      setError('The job search service could not be reached. Start the API with npm run dev and try again.')
+      setError('Job search could not connect. Check your connection and try again.')
       setJobs([])
       setSelectedJob(null)
     } finally {
@@ -120,7 +120,7 @@ function App() {
         setSource(result.source)
         setSelectedJob(result.jobs[0] ?? null)
       } catch {
-        if (active) setError('The job search service could not be reached. Start the API with npm run dev and try again.')
+        if (active) setError('Could not load jobs right now. Check your connection and use Search jobs to retry.')
       } finally {
         if (active) setLoading(false)
       }
