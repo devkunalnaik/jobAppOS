@@ -151,44 +151,6 @@ app.get('/api/jobs', async (request, response) => {
     return (data.jobs_results || []).map((job, index) => mapGoogleJob(job, index, query))
   }
 
-  // Fallback to Adzuna API
-  async function tryAdzuna() {
-    if (!process.env.ADZUNA_APP_ID || !process.env.ADZUNA_APP_KEY) return []
-    const countryCode = {
-      Netherlands: 'nl', Germany: 'de', France: 'fr', Spain: 'es', Italy: 'it',
-      Sweden: 'se', Poland: 'pl', Belgium: 'be', Austria: 'at', Switzerland: 'ch',
-      'United Kingdom': 'gb', Australia: 'au', 'New Zealand': 'nz', Singapore: 'sg',
-      Japan: 'jp', Ireland: 'ie', Denmark: 'dk', Norway: 'no', Finland: 'fi',
-      Canada: 'ca', 'United States': 'us',
-    }[country]
-    if (!countryCode) return []
-    const searchUrl = new URL(`https://api.adzuna.com/v1/api/jobs/${countryCode}/search/1`)
-    searchUrl.searchParams.set('app_id', process.env.ADZUNA_APP_ID)
-    searchUrl.searchParams.set('app_key', process.env.ADZUNA_APP_KEY)
-    searchUrl.searchParams.set('what', query)
-    searchUrl.searchParams.set('results_per_page', '20')
-    searchUrl.searchParams.set('content-type', 'application/json')
-    const result = await fetch(searchUrl)
-    if (!result.ok) throw new Error(`Adzuna returned ${result.status}`)
-    const data = await result.json()
-    return (data.results || []).map((job, index) => ({
-      id: `adzuna-${job.id}`,
-      company: job.company?.display_name || 'Company not listed',
-      title: job.title || query,
-      location: job.location?.display_name || 'Location not listed',
-      salary: job.salary_min && job.salary_max ? `${job.salary_min}–${job.salary_max}` : job.salary_is_predicted ? 'Competitive' : '',
-      posted: job.created ? new Date(job.created).toLocaleDateString() : 'Recently posted',
-      workType: job.contract_type || 'Full-time',
-      companyType: classifyCompany(job.company?.display_name || ''),
-      sponsorshipEvidence: sponsorshipEvidence(job.description || '') ? 'Sponsorship mentioned' : 'Confirm with employer',
-      description: job.description || '',
-      tags: job.category?.label ? [job.category.label] : [],
-      via: 'Adzuna',
-      url: job.redirect_url,
-      applyUrl: job.redirect_url,
-    }))
-  }
-
   // Fallback to OpenWeb Ninja API (RapidAPI - JSearch endpoint)
   async function tryOpenWebNinja() {
     if (!process.env.OPENWEB_NINJA_KEY) return []
@@ -225,13 +187,8 @@ app.get('/api/jobs', async (request, response) => {
 
   try {
     let jobs = await trySerpApi()
-    // If SerpAPI returns no results or limited results, try Adzuna
-    if ((jobs.length === 0 || (jobs.length === 1 && jobs[0].company === 'Cash App')) && process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY) {
-      const adzunaJobs = await tryAdzuna()
-      if (adzunaJobs.length > 0) jobs = adzunaJobs
-    }
-    // If still no results, try OpenWeb Ninja
-    if (jobs.length === 0 && process.env.OPENWEB_NINJA_KEY) {
+    // If SerpAPI returns no results or limited results, try OpenWeb Ninja
+    if ((jobs.length === 0 || (jobs.length === 1 && jobs[0].company === 'Cash App')) && process.env.OPENWEB_NINJA_KEY) {
       const openWebJobs = await tryOpenWebNinja()
       if (openWebJobs.length > 0) jobs = openWebJobs
     }
@@ -240,20 +197,9 @@ app.get('/api/jobs', async (request, response) => {
       jobs = getSampleJobs()
     }
     const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
-    response.json({ jobs: filtered, source: filtered.length > 0 && process.env.ADZUNA_APP_ID && jobs !== await trySerpApi() ? 'Adzuna' : 'Google Jobs' })
+    response.json({ jobs: filtered, source: filtered.length > 0 && process.env.OPENWEB_NINJA_KEY && jobs !== await trySerpApi() ? 'OpenWeb Ninja' : 'Google Jobs' })
   } catch (error) {
-    // If SerpAPI fails, try Adzuna
-    if (process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY) {
-      try {
-        const jobs = await tryAdzuna()
-        const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
-        response.json({ jobs: filtered, source: 'Adzuna' })
-        return
-      } catch (adzunaError) {
-        console.error('Adzuna fallback failed:', adzunaError.message)
-      }
-    }
-    // Try OpenWeb Ninja as fallback
+    // If SerpAPI fails, try OpenWeb Ninja
     if (process.env.OPENWEB_NINJA_KEY) {
       try {
         const jobs = await tryOpenWebNinja()
