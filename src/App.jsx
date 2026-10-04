@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownAZ, ArrowRight, ArrowUpRight, Bookmark, BriefcaseBusiness, CalendarDays, Check,
   CheckCircle2, ChevronDown, CircleHelp, Clock3, ExternalLink, FileText, Filter,
-  Globe2, LayoutDashboard, MapPin, Search, Send, Settings2, Sparkles, Trash2, X,
+  Globe2, LayoutDashboard, LogOut, MapPin, Search, Send, Sparkles, Trash2, X,
 } from 'lucide-react'
+import AuthScreen from './AuthScreen.jsx'
 import ResumeStudio from './ResumeStudio.jsx'
+import { isSupabaseConfigured, supabase } from './supabase.js'
 import './App.css'
 
 const destinations = ['All destinations', 'Netherlands', 'Germany', 'Ireland', 'Sweden', 'United Kingdom', 'France', 'Spain', 'Italy', 'Denmark', 'Norway', 'Finland', 'Belgium', 'Austria', 'Switzerland', 'Poland', 'Australia', 'New Zealand', 'Singapore', 'Japan']
@@ -29,9 +31,27 @@ function getPostingAge(posted) {
   return Number.isNaN(parsed) ? null : Math.max(0, sortReferenceTime - parsed)
 }
 
+function mapApplication(row) {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    job: row.job,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function currentIsoTimestamp() {
+  return new Date().toISOString()
+}
+
 function App() {
   const [jobs, setJobs] = useState([])
   const [applications, setApplications] = useState([])
+  const [legacyApplications, setLegacyApplications] = useState([])
+  const [authUser, setAuthUser] = useState(null)
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured)
   const [query, setQuery] = useState(initialQuery)
   const [destination, setDestination] = useState(initialDestination)
   const [companyType, setCompanyType] = useState('all')
@@ -43,6 +63,29 @@ function App() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
+
+  useEffect(() => {
+    if (!supabase) return undefined
+    let active = true
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user ?? null)
+      setAuthReady(true)
+      if (!session?.user) {
+        setApplications([])
+        setLegacyApplications([])
+      }
+    })
+    supabase.auth.getSession().then(({ data, error: sessionError }) => {
+      if (!active) return
+      if (sessionError) setError(sessionError.message)
+      setAuthUser(data.session?.user ?? null)
+      setAuthReady(true)
+    })
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
+  }, [])
 
   async function searchJobs(searchQuery = query, searchDestination = destination, searchCompanyType = companyType) {
     setLoading(true)
@@ -69,16 +112,9 @@ function App() {
     async function loadDashboard() {
       try {
         const params = new URLSearchParams({ query: initialQuery, country: initialDestination, companyType: 'all' })
-        const [applicationsResponse, jobsResponse] = await Promise.all([
-          fetch('/api/applications'),
-          fetch(`/api/jobs?${params}`),
-        ])
-        const [savedApplications, result] = await Promise.all([
-          applicationsResponse.ok ? applicationsResponse.json() : [],
-          jobsResponse.ok ? jobsResponse.json() : null,
-        ])
+        const jobsResponse = await fetch(`/api/jobs?${params}`)
+        const result = jobsResponse.ok ? await jobsResponse.json() : null
         if (!active) return
-        setApplications(savedApplications)
         if (!result) throw new Error('Job search is temporarily unavailable.')
         setJobs(result.jobs)
         setSource(result.source)
@@ -93,37 +129,118 @@ function App() {
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    if (!supabase || !authUser) return undefined
+    let active = true
+    async function loadApplications() {
+      try {
+        const { data, error: queryError } = await supabase
+          .from('job_applications')
+          .select('id, job_id, job, status, created_at, updated_at')
+          .eq('user_id', authUser.id)
+          .order('created_at', { ascending: false })
+        if (queryError) throw queryError
+        if (!active) return
+        setApplications((data || []).map(mapApplication))
+
+        if (data?.length === 0 && import.meta.env.DEV) {
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session?.access_token) return
+          const response = await fetch('/api/local-applications', {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          })
+          if (!response.ok) return
+          const legacy = await response.json()
+          if (active && Array.isArray(legacy)) setLegacyApplications(legacy)
+        }
+      } catch (queryError) {
+        if (active) setError(`Could not load your applications: ${queryError.message}`)
+      }
+    }
+    loadApplications()
+    return () => { active = false }
+  }, [authUser])
+
   async function trackJob(job, status) {
     try {
-      const response = await fetch('/api/applications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job, status }),
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Could not save this role.')
+      const { data, error: saveError } = await supabase
+        .from('job_applications')
+        .upsert({
+          user_id: authUser.id,
+          job_id: job.id,
+          job,
+          status,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id,job_id' })
+        .select('id, job_id, job, status, created_at, updated_at')
+        .single()
+      if (saveError) throw saveError
+      const result = mapApplication(data)
       setApplications((current) => [result, ...current.filter((application) => application.jobId !== job.id)])
       setNotice(status === 'Applied' ? 'Application added to your tracker.' : 'Role saved to your tracker.')
       window.setTimeout(() => setNotice(''), 2600)
     } catch (requestError) {
-      setError(requestError.message)
+      setError(requestError.message || 'Could not save this role.')
+    }
+  }
+
+  async function importLegacyApplications() {
+    try {
+      const rows = legacyApplications.map((application) => ({
+        user_id: authUser.id,
+        job_id: application.jobId || application.job.id,
+        job: application.job,
+        status: application.status,
+        created_at: application.createdAt,
+        updated_at: application.updatedAt || application.createdAt,
+      }))
+      const { data, error: importError } = await supabase
+        .from('job_applications')
+        .upsert(rows, { onConflict: 'user_id,job_id' })
+        .select('id, job_id, job, status, created_at, updated_at')
+      if (importError) throw importError
+      setApplications((data || []).map(mapApplication))
+      setLegacyApplications([])
+      setNotice(`Imported ${rows.length} local application${rows.length === 1 ? '' : 's'} to your account.`)
+      window.setTimeout(() => setNotice(''), 3200)
+    } catch (importError) {
+      setError(`Could not import local applications: ${importError.message}`)
     }
   }
 
   async function updateApplication(id, status) {
-    const response = await fetch(`/api/applications/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    })
-    if (!response.ok) return
-    const updated = await response.json()
-    setApplications((current) => current.map((application) => application.id === id ? updated : application))
+    try {
+      const { data, error: updateError } = await supabase
+        .from('job_applications')
+        .update({ status, updated_at: currentIsoTimestamp() })
+        .eq('id', id)
+        .eq('user_id', authUser.id)
+        .select('id, job_id, job, status, created_at, updated_at')
+        .single()
+      if (updateError) throw updateError
+      const updated = mapApplication(data)
+      setApplications((current) => current.map((application) => application.id === id ? updated : application))
+    } catch (updateError) {
+      setError(`Could not update this application: ${updateError.message}`)
+    }
   }
 
   async function deleteApplication(id) {
-    const response = await fetch(`/api/applications/${id}`, { method: 'DELETE' })
-    if (response.ok) setApplications((current) => current.filter((application) => application.id !== id))
+    const { error: deleteError } = await supabase
+      .from('job_applications')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', authUser.id)
+    if (deleteError) {
+      setError(`Could not remove this application: ${deleteError.message}`)
+      return
+    }
+    setApplications((current) => current.filter((application) => application.id !== id))
+  }
+
+  async function signOut() {
+    const { error: signOutError } = await supabase.auth.signOut()
+    if (signOutError) setError(signOutError.message)
   }
 
   function handleApply(job) {
@@ -147,6 +264,10 @@ function App() {
   const interviewCount = applications.filter((application) => application.status === 'Interviewing').length
   const selectedApplication = applications.find((application) => application.jobId === selectedJob?.id)
 
+  if (!isSupabaseConfigured) return <AuthScreen configurationMissing />
+  if (!authReady) return <div className="auth-loading"><span className="spinner" /> Connecting your private workspace…</div>
+  if (!authUser) return <AuthScreen />
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -166,7 +287,7 @@ function App() {
         <div className="activity-stat"><span className="activity-dot coral" /><span>In progress</span><strong>{appliedCount}</strong></div>
         <div className="sidebar-spacer" />
         <div className="sidebar-tip"><span className="tip-icon"><Sparkles size={16} /></span><strong>Make your next move</strong><p>Keep every opportunity and follow-up in one place.</p><button onClick={() => setPage('applications')}>View your pipeline <ArrowRight size={14} /></button></div>
-        <button className="profile-button" aria-label="Profile settings"><span className="avatar">KN</span><span className="profile-text"><strong>Your workspace</strong><small>Personal account</small></span><Settings2 size={16} /></button>
+        <button className="profile-button" aria-label="Sign out" title="Sign out" onClick={signOut}><span className="avatar">{authUser.email?.slice(0, 2).toUpperCase() || 'ME'}</span><span className="profile-text"><strong>{authUser.email}</strong><small>Private account</small></span><LogOut size={16} /></button>
       </aside>
 
       <main className="main-area">
@@ -174,6 +295,7 @@ function App() {
           <div className="breadcrumb"><span>Global opportunity desk</span><span className="breadcrumb-slash">/</span><strong>{page === 'discover' ? 'Discover' : page === 'applications' ? 'Applications' : 'Resume studio'}</strong></div>
           <div className="topbar-actions"><span className="today-label"><CalendarDays size={15} /> {todayLabel}</span><button className="icon-button help-button" title="Help"><CircleHelp size={18} /></button></div>
         </header>
+        {legacyApplications.length > 0 && <div className="legacy-import-banner"><div><strong>Found {legacyApplications.length} applications on this device</strong><span>Import them into your private Supabase account?</span></div><button className="legacy-import-button" onClick={importLegacyApplications}>Import applications</button><button className="legacy-skip-button" onClick={() => setLegacyApplications([])}>Skip</button></div>}
 
         {page === 'discover' ? (
           <div className="page-content discover-page">

@@ -1,12 +1,12 @@
 import 'dotenv/config'
 import express from 'express'
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const app = express()
-const port = process.env.API_PORT || 3001
+
+const port = process.env.PORT || process.env.API_PORT || 3001
 const dataDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data')
 const applicationsFile = path.join(dataDirectory, 'applications.json')
 
@@ -51,10 +51,6 @@ async function readApplications() {
     if (error.code === 'ENOENT') return []
     throw error
   }
-}
-
-async function saveApplications(items) {
-  await writeFile(applicationsFile, JSON.stringify(items, null, 2))
 }
 
 function sponsorshipEvidence(text) {
@@ -130,64 +126,26 @@ app.get('/api/jobs', async (request, response) => {
   }
 })
 
-app.get('/api/applications', async (_request, response) => {
+app.get('/api/local-applications', async (request, response) => {
+  if (process.env.ALLOW_LOCAL_MIGRATION !== 'true') {
+    return response.status(404).json({ error: 'Local application migration is disabled.' })
+  }
+  const accessToken = request.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]
+  if (!accessToken) return response.status(401).json({ error: 'A valid Supabase session is required.' })
+  const supabaseUrl = process.env.VITE_SUPABASE_URL
+  const publishableKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+  if (!supabaseUrl || !publishableKey) return response.status(503).json({ error: 'Supabase configuration is missing.' })
   try {
+    const authResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: { apikey: publishableKey, Authorization: `Bearer ${accessToken}` },
+    })
+    if (!authResponse.ok) return response.status(401).json({ error: 'The Supabase session is invalid.' })
     response.json(await readApplications())
   } catch {
-    response.status(500).json({ error: 'Could not read saved applications.' })
+    response.status(503).json({ error: 'Could not read local applications.' })
   }
 })
 
-app.post('/api/applications', async (request, response) => {
-  const { job, status = 'Saved' } = request.body || {}
-  if (!job?.id || !job?.title || !job?.company) return response.status(400).json({ error: 'A valid job is required.' })
-  if (!['Saved', 'Applied', 'Interviewing', 'Offer', 'Rejected'].includes(status)) return response.status(400).json({ error: 'Invalid application status.' })
-  try {
-    const applications = await readApplications()
-    const existing = applications.find((application) => application.jobId === job.id)
-    if (existing) {
-      existing.status = status
-      existing.updatedAt = new Date().toISOString()
-      existing.job = job
-      await saveApplications(applications)
-      return response.json(existing)
-    }
-    const application = { id: randomUUID(), jobId: job.id, job, status, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
-    applications.unshift(application)
-    await saveApplications(applications)
-    response.status(201).json(application)
-  } catch {
-    response.status(500).json({ error: 'Could not save this application.' })
-  }
-})
+app.use(express.static(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')))
 
-app.patch('/api/applications/:id', async (request, response) => {
-  const { status } = request.body || {}
-  if (!['Saved', 'Applied', 'Interviewing', 'Offer', 'Rejected'].includes(status)) return response.status(400).json({ error: 'Invalid application status.' })
-  try {
-    const applications = await readApplications()
-    const application = applications.find((item) => item.id === request.params.id)
-    if (!application) return response.status(404).json({ error: 'Application not found.' })
-    application.status = status
-    application.updatedAt = new Date().toISOString()
-    await saveApplications(applications)
-    response.json(application)
-  } catch {
-    response.status(500).json({ error: 'Could not update this application.' })
-  }
-})
-
-app.delete('/api/applications/:id', async (request, response) => {
-  try {
-    const applications = await readApplications()
-    const remaining = applications.filter((item) => item.id !== request.params.id)
-    if (remaining.length === applications.length) return response.status(404).json({ error: 'Application not found.' })
-    await saveApplications(remaining)
-    response.status(204).end()
-  } catch {
-    response.status(500).json({ error: 'Could not remove this application.' })
-  }
-})
-
-await mkdir(dataDirectory, { recursive: true })
-app.listen(port, () => console.log(`Job Atlas API listening on http://localhost:${port}`))
+app.listen(port, '0.0.0.0', () => console.log(`Job Atlas API listening on port ${port}`))
