@@ -22,10 +22,6 @@ services:
         sync: false
       - key: SERPAPI_KEY
         sync: false
-      - key: JSEARCH_KEY
-        sync: false
-      - key: INDIAN_API_KEY
-        sync: false
       - key: OPENWEB_NINJA_KEY
         sync: false
       - key: ADZUNA_APP_ID

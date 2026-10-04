@@ -151,26 +151,6 @@ app.get('/api/jobs', async (request, response) => {
     return (data.jobs_results || []).map((job, index) => mapGoogleJob(job, index, query))
   }
 
-  // Fallback to JSearch API (RapidAPI)
-  async function tryJSearch() {
-    if (!process.env.JSEARCH_KEY) return []
-    const searchUrl = new URL('https://jsearch.p.rapidapi.com/search')
-    searchUrl.searchParams.set('query', `${query} visa sponsorship ${country === 'All destinations' ? '' : country}`)
-    searchUrl.searchParams.set('page', '1')
-    searchUrl.searchParams.set('num_pages', '1')
-    const result = await fetch(searchUrl, {
-      headers: {
-        'X-RapidAPI-Key': process.env.JSEARCH_KEY,
-        'X-RapidAPI-Host': 'jsearch.p.rapidapi.com',
-      },
-    })
-    if (result.status === 403) throw new Error('JSearch subscription required')
-    if (!result.ok) throw new Error(`JSearch returned ${result.status}`)
-    const data = await result.json()
-    if (data.error) throw new Error(data.error)
-    return (data.data || []).map((job, index) => mapJSearchJob(job, index, query))
-  }
-
   // Fallback to Adzuna API
   async function tryAdzuna() {
     if (!process.env.ADZUNA_APP_ID || !process.env.ADZUNA_APP_KEY) return []
@@ -209,72 +189,22 @@ app.get('/api/jobs', async (request, response) => {
     }))
   }
 
-  // Fallback to IndianApi
-  async function tryIndianApi() {
-    if (!process.env.INDIAN_API_KEY) return []
-    const searchUrl = new URL('https://api.indianapi.in/jobs/search')
-    searchUrl.searchParams.set('query', `${query} visa sponsorship ${country === 'All destinations' ? '' : country}`)
-    searchUrl.searchParams.set('limit', '20')
-    const result = await fetch(searchUrl, {
-      headers: {
-        'Authorization': `Bearer ${process.env.INDIAN_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-    })
-    if (!result.ok) {
-      const errorText = await result.text()
-      console.error('IndianApi error:', result.status, errorText)
-      throw new Error(`IndianApi returned ${result.status}`)
-    }
-    const data = await result.json()
-    return (data.jobs || []).map((job, index) => ({
-      id: `indianapi-${job.id || index}`,
-      company: job.company_name || 'Company not listed',
-      title: job.title || query,
-      location: job.location || 'Location not listed',
-      salary: job.salary || '',
-      posted: job.posted_date ? new Date(job.posted_date).toLocaleDateString() : 'Recently posted',
-      workType: job.job_type || 'Full-time',
-      companyType: classifyCompany(job.company_name || ''),
-      sponsorshipEvidence: sponsorshipEvidence(job.description || '') ? 'Sponsorship mentioned' : 'Confirm with employer',
-      description: job.description || '',
-      tags: job.tags || [],
-      via: 'IndianApi',
-      url: job.apply_url || `https://www.google.com/search?q=${encodeURIComponent(`${job.company_name} ${job.title}`)}`,
-      applyUrl: job.apply_url || `https://www.google.com/search?q=${encodeURIComponent(`${job.company_name} ${job.title} careers`)}`,
-    }))
-  }
-
-  // Fallback to OpenWeb Ninja API
+  // Fallback to OpenWeb Ninja API (RapidAPI - JSearch endpoint)
   async function tryOpenWebNinja() {
     if (!process.env.OPENWEB_NINJA_KEY) return []
-    const searchUrl = new URL('https://openweb-ninja.p.rapidapi.com/jobs/search')
+    const searchUrl = new URL('https://jsearch.p.rapidapi.com/search')
     searchUrl.searchParams.set('query', `${query} visa sponsorship ${country === 'All destinations' ? '' : country}`)
     searchUrl.searchParams.set('page', '1')
+    searchUrl.searchParams.set('num_pages', '1')
     const result = await fetch(searchUrl, {
       headers: {
         'X-RapidAPI-Key': process.env.OPENWEB_NINJA_KEY,
-        'X-RapidAPI-Host': 'openweb-ninja.p.rapidapi.com',
+        'X-RapidAPI-Host': 'jsearch.p.rapidapi.com',
       },
     })
     if (!result.ok) throw new Error(`OpenWeb Ninja returned ${result.status}`)
     const data = await result.json()
-    return (data.jobs || []).map((job, index) => ({
-      id: `openweb-${job.id || index}`,
-      company: job.company_name || 'Company not listed',
-      title: job.title || query,
-      location: job.location || 'Location not listed',
-      salary: job.salary || '',
-      posted: job.posted_date ? new Date(job.posted_date).toLocaleDateString() : 'Recently posted',
-      workType: job.job_type || 'Full-time',
-      companyType: classifyCompany(job.company_name || ''),
-      sponsorshipEvidence: sponsorshipEvidence(job.description || '') ? 'Sponsorship mentioned' : 'Confirm with employer',
-      description: job.description || '',
-      tags: job.tags || [],
-      via: 'OpenWeb Ninja',
-      url: job.apply_url || `https://www.google.com/search?q=${encodeURIComponent(`${job.company_name} ${job.title}`)}`,
-      applyUrl: job.apply_url || `https://www.google.com/search?q=${encodeURIComponent(`${job.company_name} ${job.title} careers`)}`,
-    }))
+    return (data.data || []).map((job, index) => mapJSearchJob(job, index, query))
   }
 
   // Fallback to sample jobs for specific countries
@@ -295,20 +225,10 @@ app.get('/api/jobs', async (request, response) => {
 
   try {
     let jobs = await trySerpApi()
-    // If SerpAPI returns no results or limited results, try JSearch
-    if ((jobs.length === 0 || (jobs.length === 1 && jobs[0].company === 'Cash App')) && process.env.JSEARCH_KEY) {
-      const jsearchJobs = await tryJSearch()
-      if (jsearchJobs.length > 0) jobs = jsearchJobs
-    }
-    // If still no results, try Adzuna
-    if (jobs.length === 0 && process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY) {
+    // If SerpAPI returns no results or limited results, try Adzuna
+    if ((jobs.length === 0 || (jobs.length === 1 && jobs[0].company === 'Cash App')) && process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY) {
       const adzunaJobs = await tryAdzuna()
       if (adzunaJobs.length > 0) jobs = adzunaJobs
-    }
-    // If still no results, try IndianApi
-    if (jobs.length === 0 && process.env.INDIAN_API_KEY) {
-      const indianApiJobs = await tryIndianApi()
-      if (indianApiJobs.length > 0) jobs = indianApiJobs
     }
     // If still no results, try OpenWeb Ninja
     if (jobs.length === 0 && process.env.OPENWEB_NINJA_KEY) {
@@ -320,50 +240,28 @@ app.get('/api/jobs', async (request, response) => {
       jobs = getSampleJobs()
     }
     const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
-    response.json({ jobs: filtered, source: filtered.length > 0 && process.env.JSEARCH_KEY && jobs !== await trySerpApi() ? 'JSearch' : 'Google Jobs' })
+    response.json({ jobs: filtered, source: filtered.length > 0 && process.env.ADZUNA_APP_ID && jobs !== await trySerpApi() ? 'Adzuna' : 'Google Jobs' })
   } catch (error) {
-    // If SerpAPI fails, try JSearch
-    if (process.env.JSEARCH_KEY) {
+    // If SerpAPI fails, try Adzuna
+    if (process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY) {
       try {
-        const jobs = await tryJSearch()
+        const jobs = await tryAdzuna()
         const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
-        response.json({ jobs: filtered, source: 'JSearch' })
+        response.json({ jobs: filtered, source: 'Adzuna' })
         return
-      } catch (jsearchError) {
-        console.error('JSearch fallback failed:', jsearchError.message)
-        // Try Adzuna as fallback
-        if (process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY) {
-          try {
-            const jobs = await tryAdzuna()
-            const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
-            response.json({ jobs: filtered, source: 'Adzuna' })
-            return
-          } catch (adzunaError) {
-            console.error('Adzuna fallback failed:', adzunaError.message)
-          }
-        }
-        // Try IndianApi as fallback
-        if (process.env.INDIAN_API_KEY) {
-          try {
-            const jobs = await tryIndianApi()
-            const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
-            response.json({ jobs: filtered, source: 'IndianApi' })
-            return
-          } catch (indianApiError) {
-            console.error('IndianApi fallback failed:', indianApiError.message)
-          }
-        }
-        // Try OpenWeb Ninja as fallback
-        if (process.env.OPENWEB_NINJA_KEY) {
-          try {
-            const jobs = await tryOpenWebNinja()
-            const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
-            response.json({ jobs: filtered, source: 'OpenWeb Ninja' })
-            return
-          } catch (openWebError) {
-            console.error('OpenWeb Ninja fallback failed:', openWebError.message)
-          }
-        }
+      } catch (adzunaError) {
+        console.error('Adzuna fallback failed:', adzunaError.message)
+      }
+    }
+    // Try OpenWeb Ninja as fallback
+    if (process.env.OPENWEB_NINJA_KEY) {
+      try {
+        const jobs = await tryOpenWebNinja()
+        const filtered = jobs.filter((job) => companyType === 'all' || job.companyType === companyType)
+        response.json({ jobs: filtered, source: 'OpenWeb Ninja' })
+        return
+      } catch (openWebError) {
+        console.error('OpenWeb Ninja fallback failed:', openWebError.message)
       }
     }
     // Final fallback to sample jobs
