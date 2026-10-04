@@ -273,7 +273,7 @@ function App() {
       <aside className="sidebar">
         <a className="brand" href="#discover" onClick={() => setPage('discover')}>
           <span className="brand-mark"><Globe2 size={19} strokeWidth={2.2} /></span>
-          <span>job atlas<span className="brand-period">.</span></span>
+          <span>Job Atlas<span className="brand-period">.</span></span>
         </a>
         <div className="workspace-label">WORKSPACE</div>
         <nav className="primary-nav" aria-label="Main navigation">

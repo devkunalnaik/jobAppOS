@@ -42,7 +42,7 @@ function AuthScreen({ configurationMissing = false }) {
       <section className="auth-panel">
         <a className="auth-brand" href="/" aria-label="Job Atlas home">
           <span className="auth-brand-icon"><Globe2 size={19} /></span>
-          <span>job atlas<span>.</span></span>
+          <span>Job Atlas<span>.</span></span>
         </a>
         <div className="auth-kicker"><span /> PRIVATE CAREER WORKSPACE</div>
         <h1>{configurationMissing ? 'Connect your workspace.' : mode === 'sign-in' ? 'Welcome back.' : 'Create your workspace.'}</h1>
